@@ -1,0 +1,14 @@
+.venv/
+.vendor/
+__pycache__/
+.pytest_cache/
+private/
+data/
+tmp/
+output/
+.env
+.env.*
+!.env.example
+*.sqlite3*
+*.pdf
+*.zip

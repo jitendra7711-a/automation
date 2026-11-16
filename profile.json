@@ -1,0 +1,113 @@
+{
+  "display_name": "Your workspace",
+  "country": "India",
+  "city": "",
+  "experience_years": 2,
+  "experience_note": "Set your exact experience in the private matching profile.",
+  "current_employer": "",
+  "current_title": "",
+  "target_roles": [
+    "devops",
+    "dev ops",
+    "site reliability",
+    "sre",
+    "platform engineer",
+    "cloud infrastructure engineer"
+  ],
+  "work_modes": [
+    "remote",
+    "hybrid",
+    "onsite",
+    "unknown"
+  ],
+  "location_terms": [
+    "india",
+    "bengaluru",
+    "bangalore",
+    "mumbai",
+    "hyderabad",
+    "pune",
+    "chennai",
+    "delhi",
+    "noida",
+    "gurugram",
+    "gurgaon",
+    "kochi",
+    "kolkata",
+    "indore",
+    "chandigarh",
+    "mohali",
+    "ahmedabad"
+  ],
+  "skills": {
+    "AWS": [
+      "aws",
+      "amazon web services"
+    ],
+    "Azure": [
+      "azure",
+      "aks"
+    ],
+    "Kubernetes": [
+      "kubernetes",
+      "k8s",
+      "aks",
+      "eks"
+    ],
+    "Docker": [
+      "docker"
+    ],
+    "CI/CD": [
+      "ci/cd",
+      "cicd",
+      "ci-cd",
+      "continuous integration",
+      "continuous delivery",
+      "jenkins",
+      "github actions",
+      "azure pipelines"
+    ],
+    "Terraform": [
+      "terraform",
+      "infrastructure as code",
+      "iac"
+    ],
+    "Ansible": [
+      "ansible"
+    ],
+    "Python": [
+      "python"
+    ],
+    "Bash": [
+      "bash",
+      "shell scripting"
+    ],
+    "Linux": [
+      "linux",
+      "ubuntu"
+    ],
+    "Observability": [
+      "prometheus",
+      "grafana",
+      "elasticsearch",
+      "cloudwatch",
+      "observability"
+    ],
+    "Helm": [
+      "helm"
+    ],
+    "Incident response": [
+      "incident response",
+      "incident management",
+      "root cause",
+      "on-call",
+      "rca"
+    ]
+  },
+  "resume_facts": [],
+  "evidence_for_outreach": "",
+  "certification": "",
+  "notice_period": "",
+  "expected_salary": "",
+  "work_authorization": "Not specified; verify on application"
+}

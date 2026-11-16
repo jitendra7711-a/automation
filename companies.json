@@ -1,0 +1,9 @@
+[
+  {"name":"HackerRank","provider":"greenhouse","board":"hackerrank"},
+  {"name":"CommerceIQ","provider":"greenhouse","board":"commerceiq"},
+  {"name":"Zimperium","provider":"lever","board":"zimperium"},
+  {"name":"Smart Working Solutions","provider":"lever","board":"smart-working-solutions","note":"Supplementary hiring source; VC/startup status unverified."},
+  {"name":"Sarvam","provider":"ashby","board":"sarvam"},
+  {"name":"Level AI","provider":"ashby","board":"level-ai"},
+  {"name":"Encord","provider":"ashby","board":"encord"}
+]

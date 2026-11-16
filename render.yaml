@@ -1,0 +1,26 @@
+services:
+  - type: web
+    name: careerops-dashboard
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn --workers 1 --threads 4 --timeout 120 --bind 0.0.0.0:$PORT app:app
+    healthCheckPath: /healthz
+    autoDeployTrigger: commit
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.12
+      - key: GUNICORN_CMD_ARGS
+        value: --access-logfile -
+      - key: SECRET_KEY
+        generateValue: true
+      - key: DASHBOARD_PASSWORD
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: DATABASE_URL_UNPOOLED
+        sync: false
+      - key: INITIAL_PROFILE_JSON
+        sync: false
+      - key: AUTOMATION_TOKEN
+        generateValue: true
