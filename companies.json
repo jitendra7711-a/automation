@@ -5,5 +5,18 @@
   {"name":"Smart Working Solutions","provider":"lever","board":"smart-working-solutions","note":"Supplementary hiring source; VC/startup status unverified."},
   {"name":"Sarvam","provider":"ashby","board":"sarvam"},
   {"name":"Level AI","provider":"ashby","board":"level-ai"},
-  {"name":"Encord","provider":"ashby","board":"encord"}
+  {"name":"Encord","provider":"ashby","board":"encord"},
+  {"name":"Rubrik","provider":"greenhouse","board":"rubrik"},
+  {"name":"Groww","provider":"greenhouse","board":"groww"},
+  {"name":"Druva","provider":"greenhouse","board":"druva"},
+  {"name":"GitLab","provider":"greenhouse","board":"gitlab"},
+  {"name":"Canonical","provider":"greenhouse","board":"canonical"},
+  {"name":"Netskope","provider":"greenhouse","board":"netskope"},
+  {"name":"MongoDB","provider":"greenhouse","board":"mongodb"},
+  {"name":"Fivetran","provider":"greenhouse","board":"fivetran"},
+  {"name":"Sumo Logic","provider":"greenhouse","board":"sumologic"},
+  {"name":"JumpCloud","provider":"lever","board":"jumpcloud"},
+  {"name":"Saviynt","provider":"lever","board":"saviynt"},
+  {"name":"Jobicy DevOps","provider":"jobicy","board":"devops"},
+  {"name":"Jobicy SRE","provider":"jobicy","board":"reliability"}
 ]

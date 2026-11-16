@@ -2,8 +2,8 @@
 
 (() => {
   const $ = (id) => document.getElementById(id);
-  const state = { data: null, view: 'opportunities', status: 'all', search: '', mode: 'all', tier: 'all', selectedKey: null, csrf: null, loading: false, scanPending: false, previousFocus: null };
-  const stages = { new: 'New', shortlisted: 'Shortlisted', prepared: 'Prepared', applied: 'Applied', contacted: 'Contacted', replied: 'Replied', interviewing: 'Interviewing', rejected: 'Rejected', offer: 'Offer', withdrawn: 'Withdrawn' };
+  const state = { data: null, view: 'opportunities', status: 'all', search: '', mode: 'all', tier: 'all', freshness: 'fresh', selectedKey: null, csrf: null, loading: false, scanPending: false, previousFocus: null };
+  const stages = { new: 'New', shortlisted: 'Shortlisted', prepared: 'Prepared', applied: 'Submitted', contacted: 'Contacted', replied: 'Replied', interviewing: 'Interviewing', rejected: 'Rejected', offer: 'Offer', withdrawn: 'Withdrawn' };
   const views = {
     opportunities: ['Opportunities', 'THE NEXT STEP STARTS HERE', 'Your opportunity workspace', 'India · SRE & DevOps · Built around your experience'],
     applications: ['Applications', 'EVERY STEP, IN ONE PLACE', 'Make progress, not guesses', 'Your shortlist, prepared material and confirmed applications'],
@@ -34,6 +34,8 @@
   function jobStatus(job) { return review(job).status || 'new'; }
   function isPrepared(job) { return jobStatus(job) === 'prepared' || Boolean(job.packet && job.packet.ready); }
   function isApplied(job) { return Boolean(review(job).applied_at); }
+  function isPending(job) { return !isApplied(job) && ['new', 'shortlisted', 'prepared'].includes(jobStatus(job)) && (jobStatus(job) !== 'new' || job.discovery_ready || (isRecentAlert(job) && fitKind(job) !== 'stretch')); }
+  function isRecentAlert(job) { const age = Date.now() - Date.parse(job.alert_received_at || ''); return age >= 0 && age <= 72 * 3600000; }
   function fitKind(job) { const tier = String((job.assessment || {}).tier || '').toLowerCase(); return tier.includes('stretch') ? 'stretch' : tier.includes('priority') ? 'priority' : 'review'; }
   function runInProgress(run) { return ['running', 'queued'].includes(String(run.status).toLowerCase()); }
 
@@ -91,14 +93,16 @@
 
   function renderMetrics() {
     const jobs = state.data.jobs;
-    const active = jobs.filter((job) => job.availability !== 'not_in_latest_feed');
+    const active = jobs.filter((job) => job.discovery_ready);
     const applied = jobs.filter(isApplied).length;
     $('stat-opportunities').textContent = active.length;
-    $('stat-prepared').textContent = jobs.filter(isPrepared).length;
+    $('stat-prepared').textContent = jobs.filter(isPending).length;
+    $('pending-tab-count').textContent = jobs.filter(isPending).length;
+    $('submitted-tab-count').textContent = applied;
     $('stat-applied').textContent = applied;
     $('stat-interviewing').textContent = jobs.filter((job) => ['replied', 'interviewing'].includes(jobStatus(job))).length;
     $('nav-job-count').textContent = active.length; $('nav-applied-count').textContent = applied;
-    $('all-tab-count').textContent = jobs.length;
+    $('all-tab-count').textContent = active.length;
   }
 
   function renderProfile() {
@@ -147,42 +151,71 @@
     }
   }
 
+  function dayKey(value) {
+    const date = new Date(value);
+    if (!value || Number.isNaN(date.getTime())) return '';
+    return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit' }).format(date);
+  }
+
+  function dayGroup(job) {
+    const submitted = state.view === 'applications' && isApplied(job);
+    const value = submitted ? review(job).applied_at : job.freshness?.day ? job.published_at : job.alert_received_at;
+    const day = dayKey(value);
+    if (!day) return { key: '0000', label: 'Posting date unverified' };
+    const today = dayKey(new Date().toISOString());
+    const yesterday = dayKey(new Date(Date.now() - 86400000).toISOString());
+    const label = day === today ? 'Today' : day === yesterday ? 'Yesterday' : dateLabel(value, true);
+    return { key: day, label: `${submitted ? 'Submitted' : job.freshness?.day ? 'Posted' : 'Alert received'} · ${label}${!submitted && !job.freshness?.day ? ' · posting date unverified' : ''}` };
+  }
+
   function filteredJobs() {
     let jobs = state.data.jobs.slice();
-    if (state.view === 'applications') jobs = jobs.filter((job) => jobStatus(job) !== 'new' || isApplied(job) || isPrepared(job));
-    if (state.status !== 'all') jobs = jobs.filter((job) => state.status === 'applied' ? isApplied(job) : state.status === 'prepared' ? isPrepared(job) : jobStatus(job) === state.status);
+    if (state.view === 'applications') {
+      jobs = jobs.filter((job) => state.status === 'pending' ? isPending(job) : jobStatus(job) !== 'new' || isApplied(job) || isPrepared(job));
+    } else if (state.freshness === 'fresh') jobs = jobs.filter((job) => job.discovery_ready);
+    else if (state.freshness === 'review') jobs = jobs.filter((job) => job.availability === 'active' && fitKind(job) !== 'stretch' && (job.freshness?.state === 'fresh' || isRecentAlert(job) || (job.freshness?.state === 'undated' && !job.alert_received_at)));
+    if (state.status !== 'all') jobs = jobs.filter((job) => state.status === 'pending' ? isPending(job) : state.status === 'applied' ? isApplied(job) : state.status === 'prepared' ? isPrepared(job) : jobStatus(job) === state.status);
     if (state.mode !== 'all') jobs = jobs.filter((job) => job.workplace === state.mode);
     if (state.tier !== 'all') jobs = jobs.filter((job) => fitKind(job) === state.tier);
     if (state.search) {
       const query = state.search.toLowerCase();
       jobs = jobs.filter((job) => [job.title, job.company, job.location, job.description, ...((job.assessment || {}).skills || [])].join(' ').toLowerCase().includes(query));
     }
-    const ranks = { priority: 0, review: 1, stretch: 2 };
-    return jobs.sort((a, b) => ranks[fitKind(a)] - ranks[fitKind(b)] || Number((b.assessment || {}).score || 0) - Number((a.assessment || {}).score || 0) || String(a.company).localeCompare(String(b.company)));
+    return jobs.sort((a, b) => dayGroup(b).key.localeCompare(dayGroup(a).key) || dayGroup(a).label.localeCompare(dayGroup(b).label) || Number((b.assessment || {}).score || 0) - Number((a.assessment || {}).score || 0));
   }
 
   function renderJobs() {
     const jobs = filteredJobs(); const body = $('jobs-body'); body.replaceChildren();
     $('jobs-count-label').textContent = state.view === 'applications' ? `${jobs.length} tracked ${jobs.length === 1 ? 'opportunity' : 'opportunities'} in this view` : `${jobs.length} ${jobs.length === 1 ? 'opportunity' : 'opportunities'} for your next chapter`;
+    $('all-tab-count').textContent = state.view === 'applications' ? state.data.jobs.filter((job) => jobStatus(job) !== 'new' || isApplied(job) || isPrepared(job)).length : state.data.jobs.filter((job) => job.discovery_ready).length;
+    $('freshness-filter').hidden = state.view === 'applications';
+    $('freshness-note').textContent = state.view === 'applications' ? 'Saved pipeline retains older applications · Submitted requires your confirmation.' : '72-hour rolling window · IST day groups · unknown posting dates stay in review.';
     $('jobs-heading').textContent = state.view === 'applications' ? 'Your application pipeline' : 'Discover your next role';
     $('table-footer-label').textContent = `Showing ${jobs.length} of ${state.data.jobs.length} saved leads`;
     $('job-table-wrap').hidden = !jobs.length; $('jobs-empty').hidden = Boolean(jobs.length);
-    $('reset-filters-button').hidden = !state.search && state.mode === 'all' && state.tier === 'all' && state.status === 'all';
+    $('reset-filters-button').hidden = !state.search && state.mode === 'all' && state.tier === 'all' && state.status === 'all' && state.freshness === 'fresh';
     $('empty-title').textContent = state.data.jobs.length ? 'Nothing in this view yet.' : 'Your next chapter starts here.';
     $('empty-text').textContent = state.data.jobs.length ? 'Try another stage or clear your filters to explore more opportunities.' : 'Run a scan to collect employer openings and start building your shortlist.';
+    let previousDay = null;
+    if (!jobs.length && state.view === 'opportunities' && state.freshness === 'fresh') { $('empty-title').textContent = 'No verified fresh entry / 2-year roles yet.'; $('empty-text').textContent = 'The hourly scan checks the last 72 hours. Choose Recent / date needs review for email alerts or openings with unclear experience. Older postings are not relabelled as fresh.'; }
     for (const job of jobs) {
+      const group = dayGroup(job);
+      if (group.label !== previousDay) {
+        previousDay = group.label; const heading = element('tr', 'day-group'); const cell = element('th', '', `${group.label} · ${jobs.filter((j) => dayGroup(j).label === group.label).length}`); cell.colSpan = 5; cell.scope = 'rowgroup'; heading.append(cell); body.append(heading);
+      }
       const tr = element('tr', 'job-row'); const roleTd = element('td'); const role = element('div', 'role-cell');
       const monogram = element('div', 'company-monogram', String(job.company || '?').split(/\s+/).slice(0, 2).map((word) => word[0]).join('').toUpperCase());
       monogram.setAttribute('aria-hidden', 'true');
       const info = element('div', 'role-information'); const title = element('button', 'role-title', job.title);
       title.addEventListener('click', () => openJob(job.key));
       info.append(title, element('div', 'role-company', `${job.company} · ${job.location || 'Location not specified'}`));
-      info.append(element('div', 'role-date', job.availability === 'not_in_latest_feed' ? 'Absent from latest feed · recheck opening' : `Last confirmed ${dateLabel(job.last_seen, true)}`));
+      info.append(element('div', 'role-date', job.availability === 'not_in_latest_feed' ? 'Absent from latest feed · recheck opening' : `${job.freshness?.day ? 'Posted ' + dateLabel(job.published_at) : job.alert_received_at ? 'Alert ' + dateLabel(job.alert_received_at) + ' · posting date unknown' : 'Posting date unknown'} · ${job.source}`));
       role.append(monogram, info); roleTd.append(role);
       const fitTd = element('td'); const fit = element('div', `fit-cell ${fitKind(job)}`);
       fit.append(element('span', 'fit-score', `${Number((job.assessment || {}).score || 0)}`), element('span', 'fit-name', { priority: 'Priority review', review: 'Needs review', stretch: 'Stretch role' }[fitKind(job)])); fitTd.append(fit);
       const modeTd = element('td'); modeTd.append(element('span', 'mode-label', shortMode(job.workplace)));
-      const statusTd = element('td'); statusTd.append(element('span', `status-badge ${jobStatus(job)}`, stages[jobStatus(job)] || 'New'));
+      const statusTd = element('td'); statusTd.append(element('span', `status-badge ${isApplied(job) ? 'submitted' : isPending(job) ? 'pending' : jobStatus(job)}`, isApplied(job) ? 'Submitted' : isPending(job) ? 'Pending' : stages[jobStatus(job)] || 'New'));
+      if (!['new', 'applied'].includes(jobStatus(job))) statusTd.append(element('small', 'stage-detail', stages[jobStatus(job)]));
       const actionTd = element('td'); const action = element('button', 'row-arrow', '↗'); action.setAttribute('aria-label', `View ${job.title} at ${job.company}`); action.addEventListener('click', () => openJob(job.key)); actionTd.append(action);
       tr.append(roleTd, fitTd, modeTd, statusTd, actionTd);
       tr.addEventListener('click', (event) => { if (!event.target.closest('button,a')) openJob(job.key); });
@@ -197,6 +230,7 @@
     const summary = run.summary;
     const parts = [];
     if (summary.openings_collected !== undefined) parts.push(`${summary.openings_collected} openings`);
+    if (summary.fresh_entry_leads !== undefined) parts.push(`${summary.fresh_entry_leads} fresh entry / 2-year leads`);
     if (summary.relevant_leads !== undefined) parts.push(`${summary.relevant_leads} leads`);
     if (summary.packets_prepared !== undefined) parts.push(`${summary.packets_prepared} packs prepared`);
     if (summary.sources_failed) parts.push(`${summary.sources_failed} sources failed`);
@@ -219,6 +253,11 @@
     $('hosting-notice').textContent = cloudReady ? `Storage: ${automation.storage || 'configured'}. Scheduler: ${String(automation.mode || 'manual').replaceAll('_', ' ')}. A free Render instance can pause while idle; an uptime monitor is not an availability guarantee. Times are IST.` : `Cloud scheduling is not yet verified. Storage: ${automation.storage || 'unconfirmed'}. Use durable Postgres before relying on hosted application history; a free Render service loses local files on restart.`;
     $('health-url').value = safeUrl(automation.health_url) || '';
     $('copy-health-button').disabled = !$('health-url').value;
+    const bridge = state.data.coverage?.alert_bridge;
+    const connected = bridge?.bridge_connected_at && Date.now() - Date.parse(bridge.bridge_connected_at) < 2 * 3600000;
+    $('alert-bridge-status').textContent = connected ? 'Sync connected' : 'Setup needed';
+    $('alert-bridge-detail').textContent = connected ? `Last automatic sync ${dateLabel(bridge.bridge_connected_at)}. Email delivery frequency depends on each portal.` : `Employer feeds scan automatically. ${bridge?.last_sync ? 'A one-time alert import was completed. ' : ''}Install the private Google script below for hourly portal alert imports.`;
+    $('portal-coverage').replaceChildren(...[...new Set(Object.values(state.data.coverage?.portals || {}))].map((name) => element('span', 'skill-chip', name)));
     const sourceList = $('source-list'); sourceList.replaceChildren();
     for (const source of state.data.sources || []) {
       const row = element('div', 'source-row'); const text = element('div');
@@ -251,12 +290,12 @@
   function setStatus(status) {
     state.status = status;
     document.querySelectorAll('.status-tab').forEach((tab) => tab.classList.toggle('active', tab.dataset.status === status));
-    $('other-status-filter').value = ['all', 'shortlisted', 'prepared', 'applied'].includes(status) ? '' : status;
+    $('other-status-filter').value = ['all', 'pending', 'shortlisted', 'prepared', 'applied'].includes(status) ? '' : status;
     if (state.data) renderJobs();
   }
 
   function resetFilters(renderNow = true) {
-    state.search = ''; state.mode = 'all'; state.tier = 'all'; state.status = 'all';
+    state.search = ''; state.mode = 'all'; state.tier = 'all'; state.status = 'all'; state.freshness = 'fresh'; $('freshness-filter').value = 'fresh';
     $('search-input').value = ''; $('mode-filter').value = 'all'; $('tier-filter').value = 'all';
     if (renderNow) setStatus('all');
     else { document.querySelectorAll('.status-tab').forEach((tab) => tab.classList.toggle('active', tab.dataset.status === 'all')); $('other-status-filter').value = ''; }
@@ -271,11 +310,16 @@
     if ($('job-drawer').hidden) state.previousFocus = document.activeElement;
     $('drawer-company').textContent = job.company; $('drawer-title').textContent = job.title;
     $('drawer-location').textContent = `${job.location || 'Location not specified'} · ${shortMode(job.workplace)}`;
-    $('drawer-badges').replaceChildren(element('span', `status-badge ${jobStatus(job)}`, stages[jobStatus(job)] || 'New'), element('span', 'status-badge', (job.assessment || {}).tier || 'Needs review'));
+    $('drawer-badges').replaceChildren(element('span', `status-badge ${isApplied(job) ? 'submitted' : isPending(job) ? 'pending' : jobStatus(job)}`, isApplied(job) ? 'Submitted' : isPending(job) ? 'Pending' : stages[jobStatus(job)]), element('span', `status-badge ${jobStatus(job)}`, stages[jobStatus(job)] || 'New'), element('span', 'status-badge', (job.assessment || {}).tier || 'Needs review'));
     const employerUrl = safeUrl(job.apply_url) || safeUrl(job.url);
     $('employer-link').hidden = !employerUrl; if (employerUrl) $('employer-link').href = employerUrl;
     const assessment = job.assessment || {}; const assessmentNode = $('drawer-assessment'); assessmentNode.replaceChildren();
     assessmentNode.append(element('p', 'assessment-text', assessment.geography || 'Verify the location and eligibility requirements.'));
+    assessmentNode.append(element('p', 'assessment-text', job.freshness?.day ? `Source publication: ${dateLabel(job.published_at)} IST ? ${job.freshness.state === 'fresh' ? 'within' : 'outside'} the last 72 hours.` : `Original publication date unverified.${job.alert_received_at ? ' Alert received ' + dateLabel(job.alert_received_at) + ' IST.' : ''}`));
+    if (job.description_complete === false) assessmentNode.append(element('p', 'assessment-text', 'This is an email-alert excerpt. Read the full employer description to verify experience and posting date before preparing or applying.'));
+    const sources = element('p', 'assessment-text', 'Sources: ');
+    for (const source of job.source_links || [{source: job.source, url: job.url}]) { const url = safeUrl(source.url); if (!url) continue; const link = element('a', '', source.source); link.href = url; link.target = '_blank'; link.rel = 'noopener noreferrer'; sources.append(link, document.createTextNode(' ')); }
+    assessmentNode.append(sources);
     const evidence = Array.isArray(assessment.experience_evidence) ? assessment.experience_evidence.join('; ') : '';
     assessmentNode.append(element('p', 'assessment-text', evidence ? `Experience evidence: ${evidence}` : 'No reliable numeric experience requirement was found. Read the job description.'));
     if (job.availability === 'not_in_latest_feed') assessmentNode.append(element('p', 'assessment-text', 'This opening is absent from the latest feed. Verify availability before applying.'));
@@ -347,10 +391,11 @@
   document.querySelectorAll('[data-view]').forEach((button) => button.addEventListener('click', () => setView(button.dataset.view, { reset: true })));
   document.querySelectorAll('[data-open-profile]').forEach((button) => button.addEventListener('click', () => setView('profile')));
   document.querySelectorAll('[data-open-automation]').forEach((button) => button.addEventListener('click', () => setView('automation')));
-  document.querySelectorAll('[data-status]').forEach((button) => button.addEventListener('click', () => setStatus(button.dataset.status)));
+  document.querySelectorAll('[data-status]').forEach((button) => button.addEventListener('click', () => { if (['pending', 'applied'].includes(button.dataset.status)) setView('applications'); setStatus(button.dataset.status); }));
   document.querySelectorAll('[data-stat]').forEach((button) => button.addEventListener('click', () => { const status = button.dataset.stat; setView(status === 'all' ? 'opportunities' : 'applications', { reset: true }); setStatus(status === 'all' ? 'all' : status); }));
   $('other-status-filter').addEventListener('change', (event) => { if (event.target.value) setStatus(event.target.value); });
   $('search-input').addEventListener('input', (event) => { state.search = event.target.value.trim(); if (state.data) renderJobs(); });
+  $('freshness-filter').addEventListener('change', (event) => { state.freshness = event.target.value; if (state.data) renderJobs(); });
   $('mode-filter').addEventListener('change', (event) => { state.mode = event.target.value; if (state.data) renderJobs(); });
   $('tier-filter').addEventListener('change', (event) => { state.tier = event.target.value; if (state.data) renderJobs(); });
   $('reset-filters-button').addEventListener('click', () => resetFilters()); $('retry-button').addEventListener('click', () => loadWorkspace()); $('scan-button').addEventListener('click', runScan);

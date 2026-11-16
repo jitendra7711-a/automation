@@ -3,6 +3,7 @@ from datetime import timedelta
 import copy
 from functools import wraps
 import hmac
+import hashlib
 import io
 import json
 import logging
@@ -19,6 +20,8 @@ from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.middleware.proxy_fix import ProxyFix
 from pypdf import PdfReader
 from core import ROOT, Store, STATUSES, now, later, run_scan
+from discovery import freshness
+from alerts import PORTALS, ingest
 
 LOGIN = '''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Sign in | CareerOps</title><link rel="stylesheet" href="/static/login.css"></head><body><main><a class="brand" href="/">C<span>CareerOps</span></a><p class="eyebrow">YOUR NEXT CHAPTER</p><h1>Your search.<br>Your control.</h1><p class="intro">Sign in to your private job-search workspace.</p><form method="post"><input type="hidden" name="csrf_token" value="{{ csrf }}"><label for="password">Workspace password</label><input id="password" type="password" name="password" autocomplete="current-password" required autofocus><button type="submit">Open workspace <span aria-hidden="true">↗</span></button>{% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}</form><p class="footnote">Preparation runs automatically. Applications stay in your hands.</p></main><aside><span>CAREER OPERATIONS / 01</span><h2>Build a focused<br>job-search rhythm.</h2><p>Discover · Match · Prepare · Track</p><div class="orbit"></div></aside></body></html>'''
 
@@ -166,12 +169,18 @@ def create_app(root=ROOT, testing=False, preview=False, start_scheduler=True, da
                     runs = [dict(row) for row in db.execute('SELECT * FROM runs ORDER BY started_at DESC LIMIT 30').fetchall()]
                 for run in runs:
                     run['summary'] = json.loads(run['summary']) if run['summary'] else None
-                snapshot_cache['data'] = {'profile': profile, 'jobs': store.jobs(), 'sources': sources, 'runs': runs, 'automation': settings}
+                snapshot_cache['data'] = {'profile': profile, 'jobs': store.jobs(), 'sources': sources, 'runs': runs, 'automation': settings,
+                    'coverage': {'feeds': json.loads((root / 'companies.json').read_text(encoding='utf-8')), 'portals': PORTALS, 'alert_bridge': store.setting('alert_bridge')}}
                 snapshot_cache['expires'] = time.monotonic()+3600
             data = copy.deepcopy(snapshot_cache['data'])
         # Session-specific values must never be shared through the cache.
         data['csrf_token'] = csrf()
         data['automation']['health_url'] = request.host_url.rstrip('/')+'/healthz'
+        data['automation']['freshness_hours'] = 72
+        # Re-evaluate the rolling cutoff even when the database snapshot is cached.
+        for job in data['jobs']:
+            job['freshness'] = freshness(job)
+            job['discovery_ready'] = job['availability'] == 'active' and job['freshness']['state'] == 'fresh' and job['assessment']['entry_suitable']
         return data
 
     @app.get('/api/bootstrap')
@@ -219,6 +228,28 @@ def create_app(root=ROOT, testing=False, preview=False, start_scheduler=True, da
             return jsonify(error='Unauthorized'), 401
         run_id = start_scan()
         return (jsonify(ok=True, run_id=run_id), 202) if run_id else (jsonify(error='A scan is already running'), 409)
+
+    def alert_token():
+        return hmac.new(str(app.secret_key).encode(), b'careerops-alert-ingest-v1', hashlib.sha256).hexdigest()
+
+    @app.get('/api/alerts/script')
+    @protected
+    def alert_script():
+        script = (ROOT / 'alert_bridge.gs').read_text(encoding='utf-8')
+        script = script.replace('__CAREEROPS_URL__', json.dumps(request.host_url.rstrip('/'))).replace('__CAREEROPS_TOKEN__', json.dumps(alert_token()))
+        return Response(script, mimetype='text/plain', headers={'Content-Disposition': 'attachment; filename=CareerOps-Gmail-Bridge.gs'})
+
+    @app.post('/api/alerts/ingest')
+    def external_alerts():
+        if not hmac.compare_digest(request.headers.get('Authorization', ''), 'Bearer '+alert_token()):
+            return jsonify(error='Unauthorized'), 401
+        data = request.get_json() or {}
+        messages = data.get('messages')
+        if not isinstance(messages, list) or len(messages) > 20 or not all(isinstance(m, dict) for m in messages):
+            raise ValueError('Supply up to 20 job-alert messages per request')
+        result = ingest(store, messages, automatic=True)
+        invalidate_snapshot()
+        return jsonify(ok=True, **result)
 
     @app.post('/api/jobs/review')
     @protected

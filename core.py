@@ -15,6 +15,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+from discovery import unique_jobs
 
 ROOT = Path(__file__).resolve().parent
 IST = timezone(timedelta(hours=5, minutes=30))
@@ -141,11 +142,12 @@ class Store:
         with self.db() as db:
             db.execute("UPDATE leases SET token='',expires_at='' WHERE name='scan' AND token=?", (token,))
 
-    def source_result(self, source, jobs=None, error=None):
+    def source_result(self, source, jobs=None, error=None, incremental=False):
         timestamp = now()
         with self.db() as db:
             if jobs is not None:
-                db.execute("UPDATE jobs SET availability='not_in_latest_feed' WHERE source=?", (source,))
+                if not incremental:
+                    db.execute("UPDATE jobs SET availability='not_in_latest_feed' WHERE source=?", (source,))
                 for job in jobs:
                     db.execute("INSERT INTO jobs VALUES (?,?,?,?,?,'active') ON CONFLICT(key) DO UPDATE SET payload=excluded.payload,last_seen=excluded.last_seen,availability='active'", (job['key'], source, json.dumps(job, ensure_ascii=False), timestamp, timestamp))
                 db.execute('INSERT INTO sources VALUES (?,?,1,?,NULL,?) ON CONFLICT(source) DO UPDATE SET at=excluded.at,success=1,job_count=excluded.job_count,error=NULL,last_success_at=excluded.last_success_at', (source, timestamp, len(jobs), timestamp))
@@ -166,7 +168,7 @@ class Store:
                 continue
             job.update(first_seen=row['first_seen'], last_seen=row['last_seen'], availability=row['availability'], assessment=assessment, review=reviews.get(row['key'], {'status': 'new'}), packet=packets.get(row['key']))
             result.append(job)
-        return sorted(result, key=lambda j: (j['availability'] != 'active', j['assessment']['tier'].startswith('Stretch'), -j['assessment']['score']))
+        return unique_jobs(result)
 
     def job(self, key):
         with self.db() as db:
@@ -291,7 +293,12 @@ def assess(job, profile):
     tier = 'Stretch: experience requirement' if required is not None and required > profile['experience_years'] else 'Stretch: senior title' if senior else 'Review: experience not parsed' if required is None else 'Priority review'
     skills = [name for name, terms in profile['skills'].items() if any(has_term(job['description'], term) for term in terms)]
     score = max(0, min(100, round((40 if role else 0) + (20 if india else 5) + min(40, 5*len(skills)) - (20 if tier.startswith('Stretch') else 0))))
-    return {'relevant': bool(role and (india or global_hint or vague) and job['workplace'] in profile['work_modes']), 'score': score, 'tier': tier, 'geography': 'India listed; verify restrictions' if india else 'Location eligibility needs review', 'skills': skills, 'experience_evidence': [text for _, text in evidence], 'minimum_years_hint': required}
+    # The default discovery queue is DevOps/SRE at entry / two-year level.
+    # Unknown requirements remain available in a separate review queue.
+    target_role = any(has_term(job['title'], term) for term in ('devops', 'dev ops', 'dev-ops', 'site reliability', 'sre'))
+    entry = bool(target_role and not senior and required is not None and required <= min(2, profile['experience_years']))
+    relevant = bool(role and (india or global_hint or vague) and job['workplace'] in profile['work_modes'])
+    return {'relevant': relevant, 'entry_suitable': bool(relevant and entry), 'score': score, 'tier': tier, 'geography': 'India listed; verify restrictions' if india else 'Location eligibility needs review', 'skills': skills, 'experience_evidence': [text for _, text in evidence], 'minimum_years_hint': required}
 
 
 def feed_url(company):
@@ -299,6 +306,8 @@ def feed_url(company):
     if not re.fullmatch(r'[A-Za-z0-9_.-]+', board):
         raise ValueError('Invalid board identifier')
     provider = company['provider']
+    if provider == 'jobicy':
+        return 'https://jobicy.com/api/jobs?count=200&tag='+urllib.parse.quote(board)
     if provider == 'greenhouse':
         return f'https://boards-api.greenhouse.io/v1/boards/{board}/jobs?content=true'
     if provider == 'lever':
@@ -310,7 +319,27 @@ def feed_url(company):
 
 
 def fetch(company):
-    request = urllib.request.Request(feed_url(company), headers={'User-Agent': 'CareerOps/1.0 (personal job monitor)', 'Accept': 'application/json'})
+    url = feed_url(company)
+    if company['provider'] == 'jobicy':
+        jobs, cursors = [], set()
+        for page in range(20):
+            data = fetch_json(url)
+            if data.get('success') is False or not isinstance(data.get('jobs'), list):
+                raise ValueError('Jobicy feed schema changed')
+            jobs.extend(data['jobs'])
+            cursor = data.get('nextCursor')
+            if not cursor:
+                return {'jobs': jobs}
+            if cursor in cursors:
+                raise ValueError('Repeated pagination cursor')
+            cursors.add(cursor)
+            url = feed_url(company)+'&cursor='+urllib.parse.quote(cursor, safe='')
+        raise ValueError('Feed exceeded pagination limit; previous snapshot retained')
+    return fetch_json(url)
+
+
+def fetch_json(url):
+    request = urllib.request.Request(url, headers={'User-Agent': 'CareerOps/1.1 (personal job monitor)', 'Accept': 'application/json'})
     for attempt in range(3):
         try:
             with urllib.request.urlopen(request, timeout=25) as response:
@@ -353,6 +382,10 @@ def normalize(company, data):
             description += ' ' + plain(raw.get('additionalPlain') or raw.get('additional'))
             workplace = raw.get('workplaceType', 'unknown')
             published = datetime.fromtimestamp(raw['createdAt']/1000, IST).isoformat() if raw.get('createdAt') else ''
+        elif provider == 'jobicy':
+            title, url = raw.get('jobTitle'), raw.get('url')
+            location, description = raw.get('jobGeo', ''), plain(raw.get('jobDescription') or raw.get('jobExcerpt'))
+            workplace, published = 'remote', raw.get('pubDate', '')
         else:
             title, url = raw.get('title'), raw.get('jobUrl')
             locations = [raw.get('location', ''), ((raw.get('address') or {}).get('postalAddress') or {}).get('addressCountry', '')]
@@ -372,7 +405,7 @@ def normalize(company, data):
         apply_url = raw.get('applyUrl') or url
         if urllib.parse.urlparse(apply_url).scheme != 'https':
             apply_url = url
-        result.append({'key': f'{source}:{identifier}', 'source': source, 'company': company['name'], 'title': title.strip(), 'location': location.strip(), 'description': description.strip(), 'workplace': workplace, 'url': url, 'apply_url': apply_url, 'published_at': published, 'updated_at': raw.get('updated_at', ''), 'funding_verified': False})
+        result.append({'key': f'{source}:{identifier}', 'source': source, 'company': raw.get('companyName', company['name']) if provider == 'jobicy' else company['name'], 'title': title.strip(), 'location': location.strip(), 'description': description.strip(), 'workplace': workplace, 'url': url, 'apply_url': apply_url, 'published_at': published, 'date_kind': 'created' if provider == 'lever' else 'published', 'updated_at': raw.get('updated_at', ''), 'funding_verified': False})
     if len({job['key'] for job in result}) != len(result):
         raise ValueError('Duplicate identifiers in feed')
     return result
@@ -381,23 +414,34 @@ def normalize(company, data):
 def run_scan(store, run_id, token):
     failures, total, prepared = [], 0, 0
     try:
-        for company in load_json(store.root / 'companies.json'):
-            source = f"{company['provider']}:{company['board']}"
+        from concurrent.futures import ThreadPoolExecutor
+        companies = load_json(store.root / 'companies.json')
+        profile = store.setting('profile')
+        def collect(company):
             try:
-                jobs = normalize(company, fetch(company))
-                store.source_result(source, jobs=jobs)
-                total += len(jobs)
+                return company, normalize(company, fetch(company)), None
             except (ValueError, OSError, KeyError, TypeError, AttributeError) as error:
-                store.source_result(source, error=error)
-                failures.append(f'{source}: {error}')
-        for job in store.jobs():
-            if job['availability'] == 'active' and job['assessment']['relevant'] and job['review'].get('status', 'new') in ('new', 'shortlisted', 'prepared'):
+                return company, None, error
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            for company, jobs, error in pool.map(collect, companies):
+                source = f"{company['provider']}:{company['board']}"
+                if error is None:
+                    total += len(jobs)
+                    # Keep the database small: persist relevant role/location records,
+                    # while source totals in the run report include all screened jobs.
+                    store.source_result(source, jobs=[j for j in jobs if assess(j, profile)['relevant']])
+                else:
+                    store.source_result(source, error=error)
+                    failures.append(f'{source}: {error}')
+        jobs = store.jobs()
+        for job in jobs:
+            if job['discovery_ready'] and job['review'].get('status', 'new') in ('new', 'shortlisted', 'prepared'):
                 try:
                     store.packet(job['key'])
                     prepared += 1
                 except ValueError:
                     pass  # Missing resume is visible in profile and run summary.
-        summary = {'openings_collected': total, 'relevant_leads': len(store.jobs()), 'packets_prepared': prepared, 'sources_failed': len(failures)}
+        summary = {'openings_collected': total, 'relevant_leads': len(jobs), 'fresh_entry_leads': sum(j['discovery_ready'] for j in jobs), 'packets_prepared': prepared, 'sources_failed': len(failures), 'window_hours': 72}
         with store.db() as db:
             db.execute('UPDATE runs SET finished_at=?,status=?,summary=?,error=? WHERE id=?', (now(), 'partial' if failures else 'completed', json.dumps(summary), '\n'.join(failures) or None, run_id))
     except Exception as error:

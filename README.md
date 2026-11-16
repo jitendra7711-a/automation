@@ -1,6 +1,6 @@
 # CareerOps
 
-A private HTML/CSS/JavaScript dashboard and Python service for an India SRE/DevOps job search. It reads public Greenhouse, Lever and Ashby feeds, ranks roles using the supplied resume, prepares cover letters/outreach/checklists, and tracks real applications separately from prepared drafts. It never submits applications or sends messages.
+A private HTML/CSS/JavaScript dashboard and Python service for an India SRE/DevOps job search. It reads public Greenhouse, Lever, Ashby and Jobicy feeds, ranks roles using the supplied resume, prepares cover letters/outreach/checklists, and tracks real applications separately from prepared drafts. It never submits applications or sends messages.
 
 ## Features
 
@@ -47,6 +47,22 @@ The scheduler checks its saved schedule in memory between runs. Dashboard snapsh
 
 ## Checks
 
-Run `.venv\Scripts\python.exe -m unittest -v` for the behavior/API tests. A real source scan is a separate integration check. The source catalogue starts with seven verified employer boards; recent funding is not assumed.
+Run `.venv\Scripts\python.exe -m unittest -v` for the behavior/API tests. A real source scan is a separate integration check. The source catalogue has 18 verified employer boards plus two keyword feeds from Jobicy (20 endpoints). Recent funding is not assumed. Only relevant role/location records are persisted; the run total reports all screened openings.
 
 Primary references: [Render free limitations](https://render.com/docs/free), [Render Flask deployment](https://render.com/docs/deploy-flask), [Neon free plan](https://neon.com/pricing), [Greenhouse public job feeds](https://docs.greenhouse.io/job-board.html), [Lever postings](https://github.com/lever/postings-api), [Ashby job postings](https://developers.ashbyhq.com/docs/public-job-posting-api).
+
+## Fresh discovery and progress badges
+
+The default discovery view requires a source publication timestamp within the rolling last 72 hours, an India/possibly India-eligible location, DevOps/SRE title, no senior title and a parsed minimum experience requirement of at most two years. This is a review aid, not proof of eligibility. A missing experience requirement stays in review. Lever creation timestamps are not treated as publication dates. First-seen and last-seen never make an old opening fresh. The cutoff is re-evaluated even when the database snapshot is cached.
+
+Jobs are grouped by publication day in Asia/Kolkata; a rolling 72-hour window may cross four calendar dates. Alert receipt dates have their own labelled groups. The Applications view keeps older saved history. Pending badges count unsubmitted saved packs/shortlists and new fresh candidates or recent non-senior alert leads. Submitted badges require the owner's recorded submission confirmation, and remain submitted as the pipeline progresses to interviews.
+
+Exact application destinations are deduplicated after removing tracking parameters while retaining requisition parameters. A portal copy can also merge with one unambiguous employer record with the same company, title and location. Distinct employer requisition IDs and ambiguous matches remain separate. This avoids silent false merges; different spellings or locations can still need manual review. Original source keys and submission history are retained.
+
+## Free portal email bridge
+
+LinkedIn, Naukri, Foundit, Indeed, Glassdoor, Instahyre, Cutshort, Wellfound, TimesJobs and Hirist have alert adapters. These are email imports, not direct portal crawlers. Enable matching free alerts on the portals you use. In Automation, download the authenticated private Apps Script, paste it into a Google Apps Script project, run `installCareerOpsHourly`, and approve Google access. Google then runs it every hour independently of your computer. The script reads matching last-three-day alert threads and posts their vacancy cards to this dashboard; it never sends email or submits applications. Google time triggers are approximate, not an exact wall-clock SLA. The script checks up to 100 matching threads per execution and sends small batches.
+
+`GmailApp` requests Gmail access at Google's consent screen; review that permission before approving. The import token is derived from the workspace signing secret and restricted to `/api/alerts/ingest`. Keep the personalized download private; it is not committed. Rotating SECRET_KEY invalidates it. Import requests are bearer protected and have a 5 MB request limit. The stored record contains the job card and clean job URL, not the whole mailbox message or personalized tracking tokens. Unsupported email templates / redirect-only links are skipped; source coverage is not guaranteed for every portal.
+
+Posting dates often are absent in alert emails. Those records display receipt time and require date/experience review; receipt time never qualifies them for the strict fresh-posting queue. The dashboard shows setup needed until the cloud bridge has actually contacted it. A one-time connector import does not claim that hourly sync is installed. See [LinkedIn automation limits](https://www.linkedin.com/help/linkedin/answer/a1341387/prohibited-software-and-extensions), [Naukri free alerts](https://resume.naukri.com/frequently-asked-questions-faq/how-to-create-free-job-alerts/), [Jobicy API](https://github.com/Jobicy/remote-jobs-api) and [Google time triggers](https://developers.google.com/apps-script/guides/triggers/installable).
