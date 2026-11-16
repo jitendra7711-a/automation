@@ -43,6 +43,8 @@ Default: every hour while the hosted process runs. The dashboard supports 1, 3, 
 
 The service uses one Gunicorn worker with threads and overrides Render's default GUNICORN_CMD_ARGS to avoid preloading. This starts the scheduler inside the serving worker rather than before a process fork.
 
+The scheduler checks its saved schedule in memory between runs. Dashboard snapshots are cached for up to an hour and invalidated by writes or scan completion; CSRF tokens remain session-specific. Resume checks read metadata instead of downloading the PDF, and single-job actions query one job. These choices let Neon sleep between scans and reduce database transfer. The active-catalog/tracked-job list should gain pagination before expanding to a large catalogue or long application history; current matching still processes that list on the server. Counts reuse the rows needed for the dashboard, and the queries do not duplicate wide job records through joins.
+
 ## Checks
 
 Run `.venv\Scripts\python.exe -m unittest -v` for the behavior/API tests. A real source scan is a separate integration check. The source catalogue starts with seven verified employer boards; recent funding is not assumed.

@@ -135,6 +135,24 @@ class CareerOpsTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json['automation']['interval_hours'], 1)
 
+    def test_refresh_cache_avoids_repeat_database_reads_and_invalidates_on_changes(self):
+        self.assertEqual(self.client.get('/api/bootstrap').status_code, 200)
+        with patch.object(self.store, 'db', side_effect=AssertionError('Unexpected database read')):
+            self.assertEqual(self.client.get('/api/bootstrap').status_code, 200)
+            self.assertEqual(self.client.get('/healthz').status_code, 200)
+        self.assertEqual(self.post('/api/jobs/review', {'key': self.job['key'], 'status': 'shortlisted'}).status_code, 200)
+        refreshed = self.client.get('/api/bootstrap').json
+        self.assertEqual(refreshed['jobs'][0]['review']['status'], 'shortlisted')
+
+    def test_cached_snapshot_does_not_share_session_csrf_tokens(self):
+        first = self.client.get('/api/bootstrap').json['csrf_token']
+        second_client = self.app.test_client()
+        with second_client.session_transaction() as session:
+            session['authenticated'] = True
+            session['csrf'] = 'another-session-token'
+        second = second_client.get('/api/bootstrap').json['csrf_token']
+        self.assertNotEqual(first, second)
+
     def test_country_and_hybrid_are_not_inferred_from_company_description(self):
         self.assertEqual(self.job['workplace'], 'hybrid')
         us = dict(self.job, location='Remote (US)', description='AWS. We also have offices in India.', workplace='remote')

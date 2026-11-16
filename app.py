@@ -1,5 +1,6 @@
 """Authenticated CareerOps dashboard. Run one Gunicorn worker with threads on Render."""
 from datetime import timedelta
+import copy
 from functools import wraps
 import hmac
 import io
@@ -41,7 +42,15 @@ def create_app(root=ROOT, testing=False, preview=False, start_scheduler=True, da
     store.initialize()
     app.extensions['store'] = store
     app.extensions['scheduler_stop'] = threading.Event()
+    app.extensions['automation_schedule'] = store.setting('automation')
+    app.extensions['scan_running'] = False
+    snapshot_lock = threading.Lock()
+    snapshot_cache = {'data': None, 'expires': 0}
     attempts = {}
+
+    def invalidate_snapshot():
+        with snapshot_lock:
+            snapshot_cache.update(data=None, expires=0)
 
     def allowed():
         return bool(session.get('authenticated') or (preview and request.remote_addr in ('127.0.0.1', '::1')))
@@ -144,16 +153,26 @@ def create_app(root=ROOT, testing=False, preview=False, start_scheduler=True, da
         return jsonify(ok=True)
 
     def bootstrap_data():
-        settings = store.setting('automation')
-        settings.update(mode='in-process', storage=store.kind, cloud_ready=bool(hosted and store.kind == 'postgres'), health_url=request.host_url.rstrip('/')+'/healthz')
-        profile = store.setting('profile')
-        profile['resume_available'] = bool(store.document('resume'))
-        with store.db() as db:
-            sources = [dict(row) for row in db.execute('SELECT * FROM sources ORDER BY source').fetchall()]
-            runs = [dict(row) for row in db.execute('SELECT * FROM runs ORDER BY started_at DESC LIMIT 30').fetchall()]
-        for run in runs:
-            run['summary'] = json.loads(run['summary']) if run['summary'] else None
-        return {'profile': profile, 'jobs': store.jobs(), 'sources': sources, 'runs': runs, 'automation': settings, 'csrf_token': csrf()}
+        # Keep page refreshes from waking Neon or refetching unchanged job text.
+        # Mutations and completed scans invalidate this single-worker cache.
+        with snapshot_lock:
+            if snapshot_cache['data'] is None or time.monotonic() >= snapshot_cache['expires']:
+                settings = store.setting('automation')
+                settings.update(mode='in-process', storage=store.kind, cloud_ready=bool(hosted and store.kind == 'postgres'))
+                profile = store.setting('profile')
+                profile['resume_available'] = bool(store.document('resume', metadata=True))
+                with store.db() as db:
+                    sources = [dict(row) for row in db.execute('SELECT * FROM sources ORDER BY source').fetchall()]
+                    runs = [dict(row) for row in db.execute('SELECT * FROM runs ORDER BY started_at DESC LIMIT 30').fetchall()]
+                for run in runs:
+                    run['summary'] = json.loads(run['summary']) if run['summary'] else None
+                snapshot_cache['data'] = {'profile': profile, 'jobs': store.jobs(), 'sources': sources, 'runs': runs, 'automation': settings}
+                snapshot_cache['expires'] = time.monotonic()+3600
+            data = copy.deepcopy(snapshot_cache['data'])
+        # Session-specific values must never be shared through the cache.
+        data['csrf_token'] = csrf()
+        data['automation']['health_url'] = request.host_url.rstrip('/')+'/healthz'
+        return data
 
     @app.get('/api/bootstrap')
     @protected
@@ -169,11 +188,19 @@ def create_app(root=ROOT, testing=False, preview=False, start_scheduler=True, da
             # A stopped instance can leave an old running row. The lease makes recovery explicit.
             db.execute("UPDATE runs SET status='interrupted',finished_at=?,error='Previous process stopped before completing' WHERE status='running'", (now(),))
             db.execute('INSERT INTO runs(id,started_at,status) VALUES (?,?,?)', (run_id, now(), 'running'))
+        app.extensions['scan_running'] = True
+        invalidate_snapshot()
         def worker():
             try:
                 run_scan(store, run_id, token)
             except Exception:
                 app.logger.exception('Job scan failed')
+            finally:
+                try:
+                    app.extensions['automation_schedule'] = store.setting('automation')
+                finally:
+                    app.extensions['scan_running'] = False
+                    invalidate_snapshot()
         threading.Thread(target=worker, daemon=True, name='careerops-scan').start()
         return run_id
     app.extensions['start_scan'] = start_scan
@@ -203,13 +230,16 @@ def create_app(root=ROOT, testing=False, preview=False, start_scheduler=True, da
         if confirmation_url and (urlparse(confirmation_url).scheme != 'https' or not urlparse(confirmation_url).netloc):
             raise ValueError('Confirmation link must be an HTTPS URL')
         review = store.review(data['key'], data.get('status'), data, confirmed=data.get('confirmed') is True or data.get('confirmed_applied') is True)
+        invalidate_snapshot()
         return jsonify(ok=True, review=review)
 
     @app.post('/api/jobs/packet')
     @protected
     def packet_api():
         data = request.get_json() or {}
-        return jsonify(store.packet(data.get('key')))
+        packet = store.packet(data.get('key'))
+        invalidate_snapshot()
+        return jsonify(packet)
 
     @app.post('/api/settings')
     @protected
@@ -223,6 +253,8 @@ def create_app(root=ROOT, testing=False, preview=False, start_scheduler=True, da
         settings = store.setting('automation')
         settings.update(enabled=bool(data.get('enabled', settings['enabled'])), interval_hours=interval, submission_mode='prepare', next_run=later(hours=interval))
         store.save_setting('automation', settings)
+        app.extensions['automation_schedule'] = settings.copy()
+        invalidate_snapshot()
         return jsonify(ok=True, automation=settings)
 
     @app.post('/api/profile')
@@ -246,6 +278,7 @@ def create_app(root=ROOT, testing=False, preview=False, start_scheduler=True, da
             profile['resume_facts'] = data['resume_facts']
         store.save_setting('profile', profile)
         store.invalidate_packets()
+        invalidate_snapshot()
         return jsonify(ok=True)
 
     @app.get('/api/resume')
@@ -279,6 +312,7 @@ def create_app(root=ROOT, testing=False, preview=False, start_scheduler=True, da
         store.save_document('resume', content, 'application/pdf')
         store.save_setting('resume_text', text[:100000])
         store.invalidate_packets()
+        invalidate_snapshot()
         return jsonify(ok=True, resume_available=True, notice='Resume saved privately. Confirm your profile achievements before preparing new drafts.')
 
     @app.get('/api/export')
@@ -295,8 +329,8 @@ def create_app(root=ROOT, testing=False, preview=False, start_scheduler=True, da
             stop = app.extensions['scheduler_stop']
             while not stop.wait(30):
                 try:
-                    settings = store.setting('automation')
-                    if settings['enabled'] and settings['next_run'] <= now():
+                    settings = app.extensions['automation_schedule']
+                    if settings['enabled'] and settings['next_run'] <= now() and not app.extensions['scan_running']:
                         start_scan()
                 except Exception:
                     app.logger.exception('Scheduler check failed')

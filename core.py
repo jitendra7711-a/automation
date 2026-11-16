@@ -97,7 +97,7 @@ class Store:
                 db.execute('INSERT INTO settings(key,value) VALUES (?,?) ON CONFLICT(key) DO NOTHING', (key, json.dumps(value)))
             db.execute("INSERT INTO leases VALUES ('scan','','') ON CONFLICT(name) DO NOTHING")
         resume = self.root / 'private' / 'resume.pdf'
-        if resume.exists() and self.document('resume') is None:
+        if resume.exists() and self.document('resume', metadata=True) is None:
             self.save_document('resume', resume.read_bytes(), 'application/pdf')
 
     def setting(self, key):
@@ -119,9 +119,10 @@ class Store:
                     review['status'] = 'shortlisted'
                     db.execute('UPDATE reviews SET document=? WHERE key=?', (json.dumps(review), row['key']))
 
-    def document(self, name):
+    def document(self, name, metadata=False):
         with self.db() as db:
-            row = db.execute('SELECT * FROM documents WHERE name=?', (name,)).fetchone()
+            columns = 'name,content_type,digest' if metadata else '*'
+            row = db.execute(f'SELECT {columns} FROM documents WHERE name=?', (name,)).fetchone()
         return dict(row) if row else None
 
     def save_document(self, name, content, content_type):
@@ -154,9 +155,9 @@ class Store:
     def jobs(self):
         profile = self.setting('profile')
         with self.db() as db:
-            rows = db.execute('SELECT * FROM jobs').fetchall()
-            reviews = {row['key']: json.loads(row['document']) for row in db.execute('SELECT * FROM reviews').fetchall()}
-            packets = {row['key']: json.loads(row['document']) for row in db.execute('SELECT * FROM packets').fetchall()}
+            rows = db.execute("SELECT * FROM jobs WHERE availability='active' OR key IN (SELECT key FROM reviews)").fetchall()
+            reviews = {row['key']: json.loads(row['document']) for row in db.execute('SELECT key,document FROM reviews').fetchall()}
+            packets = {row['key']: json.loads(row['document']) for row in db.execute('SELECT key,document FROM packets').fetchall()}
         result = []
         for row in rows:
             job = json.loads(row['payload'])
@@ -168,7 +169,15 @@ class Store:
         return sorted(result, key=lambda j: (j['availability'] != 'active', j['assessment']['tier'].startswith('Stretch'), -j['assessment']['score']))
 
     def job(self, key):
-        return next((j for j in self.jobs() if j['key'] == key), None)
+        with self.db() as db:
+            row = db.execute('SELECT * FROM jobs WHERE key=?', (key,)).fetchone()
+            if row is None:
+                return None
+            review = db.execute('SELECT document FROM reviews WHERE key=?', (key,)).fetchone()
+            packet = db.execute('SELECT document FROM packets WHERE key=?', (key,)).fetchone()
+        job = json.loads(row['payload'])
+        job.update(first_seen=row['first_seen'], last_seen=row['last_seen'], availability=row['availability'], assessment=assess(job, self.setting('profile')), review=json.loads(review['document']) if review else {'status': 'new'}, packet=json.loads(packet['document']) if packet else None)
+        return job
 
     def review(self, key, status, fields=None, confirmed=False):
         fields = fields or {}
@@ -205,7 +214,7 @@ class Store:
         if not job:
             raise ValueError('Unknown job')
         profile = self.setting('profile')
-        resume = self.document('resume')
+        resume = self.document('resume', metadata=True)
         if not resume:
             raise ValueError('Upload your resume before preparing an application packet.')
         digest = fingerprint([profile, resume['digest'], job['description'], job['title'], bool(job['review'].get('applied_at'))])
