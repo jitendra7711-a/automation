@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 from email.utils import parseaddr
 import hashlib
 import re
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
 from bs4 import BeautifulSoup
 from discovery import IST, timestamp
 
@@ -33,11 +33,11 @@ def job_link(href):
                 return None
             return portal, 'https://www.linkedin.com/jobs/view/'+match.group(1), match.group(1)
         # Do not follow email tracking redirects or turn alert/search pages into jobs.
-        if not re.search(r'/(?:job-listings|job-listing|jobs?/(?!search|alerts)|rc/clk|viewjob)', path, re.I):
+        if not re.search(r'/(?:job-listings|job-listing|job-detail/|job-\d|jobs?/(?!search|alerts)|j/|rc/clk|viewjob)', path, re.I):
             return None
         if re.search(r'(?:search|alert|unsubscribe|preferences)', path, re.I):
             return None
-        query = url.query if portal.startswith('indeed.') else ''
+        query = urlencode([(k, v) for k, v in parse_qsl(url.query) if k in ('jk', 'vjk')]) if portal.startswith('indeed.') else ''
         clean = urlunsplit(('https', host, path.rstrip('/'), query, ''))
         return portal, clean, hashlib.sha256(clean.encode()).hexdigest()[:24]
     except ValueError:
