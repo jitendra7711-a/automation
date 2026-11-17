@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta
 import json
 import unittest
+from unittest.mock import patch
 import test_app
 from discovery import IST, applicants, decorate, freshness
 from alerts import parse_alerts, ingest
@@ -120,6 +121,18 @@ class TrackingAndFreshnessTests(unittest.TestCase):
         self.store.source_result(self.job['source'], jobs=[self.job, second])
         receipt = {'id': 'ambiguous', 'portal': 'naukri.com', 'received_at': datetime.now(IST).isoformat(), 'url': '', 'title': self.job['title'], 'company': self.job['company']}
         self.assertEqual(reconcile(self.store, [receipt])['submissions_updated'], 0)
+
+    def test_repeated_receipts_do_not_refetch_the_job_catalogue(self):
+        receipt = parse_receipts([self.receipt('123')])[0]
+        with patch.object(self.store, 'setting', return_value=[receipt]), patch.object(self.store, 'db', side_effect=AssertionError('Unexpected full catalogue read')):
+            self.assertEqual(reconcile(self.store, [receipt])['submissions_updated'], 0)
+
+    def test_deferred_receipt_is_retried_when_a_new_job_appears(self):
+        receipt = {'id': 'later', 'portal': 'naukri.com', 'received_at': datetime.now(IST).isoformat(), 'url': '', 'title': 'SRE Engineer', 'company': 'Later Example'}
+        self.assertEqual(reconcile(self.store, [receipt])['submissions_updated'], 0)
+        later = dict(self.job, key='later', title='SRE Engineer', company='Later Example')
+        self.store.source_result(later['source'], jobs=[later])
+        self.assertEqual(reconcile(self.store, retry=True)['submissions_updated'], 1)
 
     def test_spoofed_senders_and_incomplete_confirmation_do_not_change_status(self):
         receipt = self.receipt('123')

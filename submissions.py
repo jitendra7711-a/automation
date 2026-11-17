@@ -63,18 +63,22 @@ def parse_receipts(messages, reference=None):
     return list({r['id']: r for r in receipts}.values())
 
 
-def reconcile(store, new_receipts=()):
+def reconcile(store, new_receipts=(), retry=False):
     from core import now, assess
     receipts = {r['id']: r for r in store.setting('submission_receipts') or []}
-    receipts.update({r['id']: r for r in new_receipts})
+    incoming = {r['id']: r for r in new_receipts if r['id'] not in receipts}
+    receipts.update(incoming)
     retained = sorted(receipts.values(), key=lambda r: r['received_at'], reverse=True)[:1000]
-    if new_receipts:
-        store.save_setting('submission_receipts', retained)
+    pending = retained if retry else list(incoming.values())
+    # Alert-only batches and repeated receipts must not download every job from
+    # the free database. The hourly employer scan retries deferred matches once.
+    if not pending:
+        return {'receipts_found': len(new_receipts), 'receipts_matched': 0, 'submissions_updated': 0}
     with store.db() as db:
         jobs = {r['key']: json.loads(r['payload']) for r in db.execute('SELECT key,payload FROM jobs').fetchall()}
         reviews = {r['key']: json.loads(r['document']) for r in db.execute('SELECT key,document FROM reviews').fetchall()}
     changed, matched = 0, 0
-    for receipt in retained:
+    for receipt in pending:
         url = canonical_url(receipt.get('url'))
         keys = [key for key, job in jobs.items() if url and url in (canonical_url(job.get('url')), canonical_url(job.get('apply_url')))]
         if not keys:
@@ -91,6 +95,8 @@ def reconcile(store, new_receipts=()):
                 keys = [job['key']]
         if keys:
             matched += 1
+            receipt['matched_keys'] = keys
+            receipt.pop('job', None)
         for key in keys:
             review = reviews.get(key, {'status': 'new'}).copy()
             if review.get('applied_at'):
@@ -104,4 +110,5 @@ def reconcile(store, new_receipts=()):
                 db.execute('INSERT INTO events VALUES (?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING', ('receipt:'+receipt['id']+':'+key, key, now(), 'applied', 'Submission confirmed by '+receipt['portal']+' email', receipt.get('url') or ''))
             reviews[key] = review
             changed += 1
+    store.save_setting('submission_receipts', retained)
     return {'receipts_found': len(new_receipts), 'receipts_matched': matched, 'submissions_updated': changed}

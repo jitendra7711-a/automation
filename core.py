@@ -434,7 +434,7 @@ def run_scan(store, run_id, token):
                     store.source_result(source, error=error)
                     failures.append(f'{source}: {error}')
         from submissions import reconcile
-        reconcile(store)
+        reconcile(store, retry=True)
         jobs = store.jobs()
         for job in jobs:
             if job['discovery_ready'] and job['review'].get('status', 'new') in ('new', 'shortlisted', 'prepared'):
