@@ -2,7 +2,7 @@
 // This reads matching job alerts only. It does not send mail or submit applications.
 const CAREEROPS_URL = __CAREEROPS_URL__;
 const CAREEROPS_TOKEN = __CAREEROPS_TOKEN__;
-const CAREEROPS_QUERY = 'newer_than:3d -in:spam -in:trash (from:linkedin.com OR from:naukri.com OR from:foundit.in OR from:indeed.com OR from:indeed.co.in OR from:glassdoor.com OR from:instahyre.com OR from:cutshort.io OR from:wellfound.com OR from:timesjobs.com OR from:hirist.tech OR from:hirist.com) (devops OR "dev ops" OR sre OR "site reliability" OR "platform engineer")';
+const CAREEROPS_QUERY = 'newer_than:3d -in:spam -in:trash (from:linkedin.com OR from:naukri.com OR from:foundit.in OR from:indeed.com OR from:indeed.co.in OR from:glassdoor.com OR from:instahyre.com OR from:cutshort.io OR from:wellfound.com OR from:timesjobs.com OR from:hirist.tech OR from:hirist.com) (devops OR "dev ops" OR sre OR "site reliability" OR "platform engineer" OR subject:"your application was sent" OR subject:"you applied for")';
 
 function syncCareerOpsAlerts() {
   const lock = LockService.getScriptLock();

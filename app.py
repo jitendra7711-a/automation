@@ -20,7 +20,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.middleware.proxy_fix import ProxyFix
 from pypdf import PdfReader
 from core import ROOT, Store, STATUSES, now, later, run_scan
-from discovery import freshness
+from discovery import decorate, FRESH_HOURS, APPLICANT_LIMIT
 from alerts import PORTALS, ingest
 
 LOGIN = '''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Sign in | CareerOps</title><link rel="stylesheet" href="/static/login.css"></head><body><main><a class="brand" href="/">C<span>CareerOps</span></a><p class="eyebrow">YOUR NEXT CHAPTER</p><h1>Your search.<br>Your control.</h1><p class="intro">Sign in to your private job-search workspace.</p><form method="post"><input type="hidden" name="csrf_token" value="{{ csrf }}"><label for="password">Workspace password</label><input id="password" type="password" name="password" autocomplete="current-password" required autofocus><button type="submit">Open workspace <span aria-hidden="true">↗</span></button>{% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}</form><p class="footnote">Preparation runs automatically. Applications stay in your hands.</p></main><aside><span>CAREER OPERATIONS / 01</span><h2>Build a focused<br>job-search rhythm.</h2><p>Discover · Match · Prepare · Track</p><div class="orbit"></div></aside></body></html>'''
@@ -176,11 +176,10 @@ def create_app(root=ROOT, testing=False, preview=False, start_scheduler=True, da
         # Session-specific values must never be shared through the cache.
         data['csrf_token'] = csrf()
         data['automation']['health_url'] = request.host_url.rstrip('/')+'/healthz'
-        data['automation']['freshness_hours'] = 72
+        data['automation']['freshness_hours'] = FRESH_HOURS
+        data['automation']['applicant_limit'] = APPLICANT_LIMIT
         # Re-evaluate the rolling cutoff even when the database snapshot is cached.
-        for job in data['jobs']:
-            job['freshness'] = freshness(job)
-            job['discovery_ready'] = job['availability'] == 'active' and job['freshness']['state'] == 'fresh' and job['assessment']['entry_suitable']
+        data['jobs'] = [decorate(job) for job in data['jobs']]
         return data
 
     @app.get('/api/bootstrap')

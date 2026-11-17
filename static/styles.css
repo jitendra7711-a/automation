@@ -18,3 +18,7 @@
 .status-badge.pending{background:#fff0cf;color:#855d14}.status-badge.submitted{background:#dcefe4;color:#236345}.stage-detail{display:block;margin-top:5px;color:#6c786d;font-size:9px}
 .portal-panel{grid-column:1/-1}.portal-setup{padding:0 25px 25px;font-size:12px;line-height:1.8;color:#5d6c61}.portal-setup a{color:#235c45;text-decoration:underline}.portal-setup ol{padding-left:20px}.portal-setup .skill-chips{margin:15px 0}.portal-setup code{font-size:11px;overflow-wrap:anywhere}.filter-selects{flex-wrap:wrap}.status-tabs{overflow-x:auto}.status-tab{white-space:nowrap}
 @media(max-width:550px){.day-group th{font-size:9px;padding:12px 17px!important}.filter-selects{width:100%}.filter-selects select{max-width:100%}.portal-setup{padding:0 17px 19px;font-size:11px}.status-tabs{gap:15px}.stage-detail{font-size:8px}}
+
+.submit-quick{border:1px solid #c7d9ca;background:#edf5ec;color:#285b3f;border-radius:7px;padding:7px 9px;font:inherit;font-size:10px;cursor:pointer;white-space:normal}.submit-quick:disabled{opacity:.5}.filter-selects select{max-width:100%}
+
+.live-search-note{padding:0 24px 18px;font-size:11px;line-height:1.7}.live-search-note a{color:#286045;text-decoration:underline}.live-search-note span{display:block;color:#6a756d;font-size:10px}

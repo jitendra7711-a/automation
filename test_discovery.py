@@ -13,9 +13,9 @@ from core import assess, normalize, run_scan
 class DiscoveryTests(unittest.TestCase):
     setUp = test_app.CareerOpsTests.setUp
     tearDown = test_app.CareerOpsTests.tearDown
-    def test_rolling_72_hours_and_unknown_dates(self):
+    def test_rolling_24_hours_and_unknown_dates(self):
         reference = datetime(2026, 11, 16, 1, 0, tzinfo=IST)
-        for hours, expected in [(0, 'fresh'), (71.99, 'fresh'), (72, 'fresh'), (72.01, 'stale'), (-1, 'future')]:
+        for hours, expected in [(0, 'fresh'), (23.99, 'fresh'), (24, 'fresh'), (24.01, 'stale'), (-1, 'future')]:
             self.assertEqual(freshness({'published_at': (reference-timedelta(hours=hours)).isoformat()}, reference)['state'], expected)
         for job in ({'first_seen': reference.isoformat()}, {'published_at': reference.replace(tzinfo=None).isoformat()}, {'published_at': reference.isoformat(), 'date_kind': 'created'}):
             self.assertEqual(freshness(job, reference)['state'], 'undated')
@@ -57,7 +57,7 @@ class DiscoveryTests(unittest.TestCase):
         with patch('core.fetch', return_value={'jobs': [fresh, old]}):
             run_scan(self.store, 'test', token)
         by_key = {j['key']: j for j in self.store.jobs()}
-        self.assertTrue(by_key['ashby:example:fresh']['packet'])
+        self.assertIsNone(by_key['ashby:example:fresh']['packet'])  # No applicant-count evidence.
         self.assertIsNone(by_key['ashby:example:old']['packet'])
         self.assertTrue(by_key[self.job['key']]['review']['applied_at'])
 

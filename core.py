@@ -433,6 +433,8 @@ def run_scan(store, run_id, token):
                 else:
                     store.source_result(source, error=error)
                     failures.append(f'{source}: {error}')
+        from submissions import reconcile
+        reconcile(store)
         jobs = store.jobs()
         for job in jobs:
             if job['discovery_ready'] and job['review'].get('status', 'new') in ('new', 'shortlisted', 'prepared'):
@@ -441,7 +443,7 @@ def run_scan(store, run_id, token):
                     prepared += 1
                 except ValueError:
                     pass  # Missing resume is visible in profile and run summary.
-        summary = {'openings_collected': total, 'relevant_leads': len(jobs), 'fresh_entry_leads': sum(j['discovery_ready'] for j in jobs), 'packets_prepared': prepared, 'sources_failed': len(failures), 'window_hours': 72}
+        summary = {'openings_collected': total, 'relevant_leads': len(jobs), 'fresh_entry_leads': sum(j['discovery_ready'] for j in jobs), 'packets_prepared': prepared, 'sources_failed': len(failures), 'window_hours': 24, 'applicant_limit': 25}
         with store.db() as db:
             db.execute('UPDATE runs SET finished_at=?,status=?,summary=?,error=? WHERE id=?', (now(), 'partial' if failures else 'completed', json.dumps(summary), '\n'.join(failures) or None, run_id))
     except Exception as error:

@@ -44,6 +44,27 @@ def job_link(href):
         return None
 
 
+def card_evidence(lines, received):
+    evidence = {}
+    for line in lines:
+        text = ' '.join(line.split())
+        age = re.search(r'\b(?:posted|listed)\s+(\d+)\s*(minutes?|mins?|hours?|hrs?)\s+ago\b', text, re.I)
+        age = age or re.fullmatch(r'(\d+)\s*(minutes?|mins?|hours?|hrs?)\s+ago', text, re.I)
+        if age:
+            unit = 60 if age.group(2).lower().startswith('m') else 3600
+            seconds = int(age.group(1))*unit
+            evidence.update(published_at=(received-timedelta(seconds=seconds)).isoformat(),
+                            published_earliest_at=(received-timedelta(seconds=seconds+unit)).isoformat(),
+                            date_kind='published', publication_label=text)
+        count = re.fullmatch(r'(\d+)\s+applicants?', text, re.I)
+        low = re.fullmatch(r'(?:be among (?:the )?first|fewer than|less than|under)\s+(\d+)\s+applicants?', text, re.I)
+        if count or low:
+            item = {'label': text, 'observed_at': received.isoformat(), 'basis': 'portal_email'}
+            item['count' if count else 'upper_exclusive'] = int((count or low).group(1))
+            evidence['applicant_evidence'] = item
+    return evidence
+
+
 def parse_alerts(messages, reference=None):
     reference = reference or datetime.now(IST)
     jobs = {}
@@ -88,6 +109,7 @@ def parse_alerts(messages, reference=None):
                    'workplace': workplace, 'url': url, 'apply_url': url,
                    'published_at': '', 'date_kind': 'alert_received', 'alert_received_at': received.isoformat(),
                    'updated_at': '', 'funding_verified': False, 'description_complete': False}
+            job.update(card_evidence(lines, received))
             existing = jobs.get(key)
             if not existing or len(job['description']) > len(existing['description']):
                 jobs[key] = job
@@ -96,12 +118,14 @@ def parse_alerts(messages, reference=None):
 
 def ingest(store, messages, automatic=False):
     from core import now
+    from submissions import parse_receipts, reconcile
     jobs = parse_alerts(messages)
     for source in {j['source'] for j in jobs}:
         store.source_result(source, jobs=[j for j in jobs if j['source'] == source], incremental=True)
+    submissions = reconcile(store, parse_receipts(messages))
     status = store.setting('alert_bridge') or {}
-    status.update(last_sync=now(), messages_checked=len(messages), jobs_received=len(jobs))
+    status.update(last_sync=now(), messages_checked=len(messages), jobs_received=len(jobs), **submissions)
     if automatic:
         status['bridge_connected_at'] = now()
     store.save_setting('alert_bridge', status)
-    return {'messages_checked': len(messages), 'jobs_received': len(jobs)}
+    return {'messages_checked': len(messages), 'jobs_received': len(jobs), **submissions}

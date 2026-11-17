@@ -2,7 +2,7 @@
 
 (() => {
   const $ = (id) => document.getElementById(id);
-  const state = { data: null, view: 'opportunities', status: 'all', search: '', mode: 'all', tier: 'all', freshness: 'fresh', selectedKey: null, csrf: null, loading: false, scanPending: false, previousFocus: null };
+  const state = { data: null, view: 'opportunities', status: 'all', search: '', mode: 'all', tier: 'all', freshness: 'fresh', applicants: 'under25', selectedKey: null, csrf: null, loading: false, scanPending: false, previousFocus: null };
   const stages = { new: 'New', shortlisted: 'Shortlisted', prepared: 'Prepared', applied: 'Submitted', contacted: 'Contacted', replied: 'Replied', interviewing: 'Interviewing', rejected: 'Rejected', offer: 'Offer', withdrawn: 'Withdrawn' };
   const views = {
     opportunities: ['Opportunities', 'THE NEXT STEP STARTS HERE', 'Your opportunity workspace', 'India · SRE & DevOps · Built around your experience'],
@@ -32,10 +32,9 @@
   function shortMode(value) { return { remote: 'Remote', hybrid: 'Hybrid', onsite: 'On-site', unknown: 'Not specified' }[value] || 'Not specified'; }
   function review(job) { return job.review || {}; }
   function jobStatus(job) { return review(job).status || 'new'; }
-  function isPrepared(job) { return jobStatus(job) === 'prepared' || Boolean(job.packet && job.packet.ready); }
-  function isApplied(job) { return Boolean(review(job).applied_at); }
-  function isPending(job) { return !isApplied(job) && ['new', 'shortlisted', 'prepared'].includes(jobStatus(job)) && (jobStatus(job) !== 'new' || job.discovery_ready || (isRecentAlert(job) && fitKind(job) !== 'stretch')); }
-  function isRecentAlert(job) { const age = Date.now() - Date.parse(job.alert_received_at || ''); return age >= 0 && age <= 72 * 3600000; }
+  function isApplied(job) { return Boolean(review(job).applied_at || jobStatus(job) === 'applied'); }
+  function isPrepared(job) { return !isApplied(job) && (jobStatus(job) === 'prepared' || Boolean(job.packet && job.packet.ready)); }
+  function isPending(job) { return !isApplied(job) && Boolean(job.discovery_ready) && ['new', 'shortlisted', 'prepared'].includes(jobStatus(job)); }
   function fitKind(job) { const tier = String((job.assessment || {}).tier || '').toLowerCase(); return tier.includes('stretch') ? 'stretch' : tier.includes('priority') ? 'priority' : 'review'; }
   function runInProgress(run) { return ['running', 'queued'].includes(String(run.status).toLowerCase()); }
 
@@ -172,8 +171,10 @@
     let jobs = state.data.jobs.slice();
     if (state.view === 'applications') {
       jobs = jobs.filter((job) => state.status === 'pending' ? isPending(job) : jobStatus(job) !== 'new' || isApplied(job) || isPrepared(job));
-    } else if (state.freshness === 'fresh') jobs = jobs.filter((job) => job.discovery_ready);
-    else if (state.freshness === 'review') jobs = jobs.filter((job) => job.availability === 'active' && fitKind(job) !== 'stretch' && (job.freshness?.state === 'fresh' || isRecentAlert(job) || (job.freshness?.state === 'undated' && !job.alert_received_at)));
+    } else {
+      jobs = jobs.filter((job) => !isApplied(job) && job.availability === 'active' && job.freshness?.state === 'fresh' && job.assessment?.entry_suitable);
+      if (state.applicants === 'under25') jobs = jobs.filter((job) => job.applicants?.eligible);
+    }
     if (state.status !== 'all') jobs = jobs.filter((job) => state.status === 'pending' ? isPending(job) : state.status === 'applied' ? isApplied(job) : state.status === 'prepared' ? isPrepared(job) : jobStatus(job) === state.status);
     if (state.mode !== 'all') jobs = jobs.filter((job) => job.workplace === state.mode);
     if (state.tier !== 'all') jobs = jobs.filter((job) => fitKind(job) === state.tier);
@@ -189,15 +190,16 @@
     $('jobs-count-label').textContent = state.view === 'applications' ? `${jobs.length} tracked ${jobs.length === 1 ? 'opportunity' : 'opportunities'} in this view` : `${jobs.length} ${jobs.length === 1 ? 'opportunity' : 'opportunities'} for your next chapter`;
     $('all-tab-count').textContent = state.view === 'applications' ? state.data.jobs.filter((job) => jobStatus(job) !== 'new' || isApplied(job) || isPrepared(job)).length : state.data.jobs.filter((job) => job.discovery_ready).length;
     $('freshness-filter').hidden = state.view === 'applications';
-    $('freshness-note').textContent = state.view === 'applications' ? 'Saved pipeline retains older applications · Submitted requires your confirmation.' : '72-hour rolling window · IST day groups · unknown posting dates stay in review.';
-    $('jobs-heading').textContent = state.view === 'applications' ? 'Your application pipeline' : 'Discover your next role';
+    $('applicants-filter').hidden = state.view === 'applications';
+    $('freshness-note').textContent = state.view === 'applications' ? 'Application history · Pending contains only latest eligible jobs · confirmations sync hourly.' : 'Last 24h only · counts reported within 1 hour · unknown dates excluded.';
+    $('jobs-heading').textContent = state.view === 'applications' ? 'Your application history' : 'Discover your next role';
     $('table-footer-label').textContent = `Showing ${jobs.length} of ${state.data.jobs.length} saved leads`;
     $('job-table-wrap').hidden = !jobs.length; $('jobs-empty').hidden = Boolean(jobs.length);
-    $('reset-filters-button').hidden = !state.search && state.mode === 'all' && state.tier === 'all' && state.status === 'all' && state.freshness === 'fresh';
+    $('reset-filters-button').hidden = !state.search && state.mode === 'all' && state.tier === 'all' && state.status === 'all' && state.freshness === 'fresh' && state.applicants === 'under25';
     $('empty-title').textContent = state.data.jobs.length ? 'Nothing in this view yet.' : 'Your next chapter starts here.';
     $('empty-text').textContent = state.data.jobs.length ? 'Try another stage or clear your filters to explore more opportunities.' : 'Run a scan to collect employer openings and start building your shortlist.';
     let previousDay = null;
-    if (!jobs.length && state.view === 'opportunities' && state.freshness === 'fresh') { $('empty-title').textContent = 'No verified fresh entry / 2-year roles yet.'; $('empty-text').textContent = 'The hourly scan checks the last 72 hours. Choose Recent / date needs review for email alerts or openings with unclear experience. Older postings are not relabelled as fresh.'; }
+    if (!jobs.length && state.view === 'opportunities' && state.freshness === 'fresh') { $('empty-title').textContent = state.applicants === 'under25' ? 'No verified 24-hour / under-25 matches yet.' : 'No verified 24-hour entry-level matches yet.'; $('empty-text').textContent = 'Only DevOps/SRE jobs posted in the last 24 hours with a verified count below 25 appear here. Missing dates or applicant counts do not qualify. You can choose Include unknown applicant counts to review fresh dated jobs separately.'; }
     for (const job of jobs) {
       const group = dayGroup(job);
       if (group.label !== previousDay) {
@@ -214,9 +216,12 @@
       const fitTd = element('td'); const fit = element('div', `fit-cell ${fitKind(job)}`);
       fit.append(element('span', 'fit-score', `${Number((job.assessment || {}).score || 0)}`), element('span', 'fit-name', { priority: 'Priority review', review: 'Needs review', stretch: 'Stretch role' }[fitKind(job)])); fitTd.append(fit);
       const modeTd = element('td'); modeTd.append(element('span', 'mode-label', shortMode(job.workplace)));
+      info.append(element('div', 'role-date', job.applicants?.label || 'Applicant count unavailable'));
       const statusTd = element('td'); statusTd.append(element('span', `status-badge ${isApplied(job) ? 'submitted' : isPending(job) ? 'pending' : jobStatus(job)}`, isApplied(job) ? 'Submitted' : isPending(job) ? 'Pending' : stages[jobStatus(job)] || 'New'));
       if (!['new', 'applied'].includes(jobStatus(job))) statusTd.append(element('small', 'stage-detail', stages[jobStatus(job)]));
-      const actionTd = element('td'); const action = element('button', 'row-arrow', '↗'); action.setAttribute('aria-label', `View ${job.title} at ${job.company}`); action.addEventListener('click', () => openJob(job.key)); actionTd.append(action);
+      const actionTd = element('td');
+      if (!isApplied(job)) { const submitted = element('button', 'submit-quick', 'Maine submit kar diya'); submitted.addEventListener('click', () => markSubmitted(job, submitted)); actionTd.append(submitted); }
+      const action = element('button', 'row-arrow', '↗'); action.setAttribute('aria-label', `View ${job.title} at ${job.company}`); action.addEventListener('click', () => openJob(job.key)); actionTd.append(action);
       tr.append(roleTd, fitTd, modeTd, statusTd, actionTd);
       tr.addEventListener('click', (event) => { if (!event.target.closest('button,a')) openJob(job.key); });
       body.append(tr);
@@ -295,7 +300,7 @@
   }
 
   function resetFilters(renderNow = true) {
-    state.search = ''; state.mode = 'all'; state.tier = 'all'; state.status = 'all'; state.freshness = 'fresh'; $('freshness-filter').value = 'fresh';
+    state.search = ''; state.mode = 'all'; state.tier = 'all'; state.status = 'all'; state.freshness = 'fresh'; state.applicants = 'under25'; $('freshness-filter').value = 'fresh'; $('applicants-filter').value = 'under25';
     $('search-input').value = ''; $('mode-filter').value = 'all'; $('tier-filter').value = 'all';
     if (renderNow) setStatus('all');
     else { document.querySelectorAll('.status-tab').forEach((tab) => tab.classList.toggle('active', tab.dataset.status === 'all')); $('other-status-filter').value = ''; }
@@ -315,7 +320,7 @@
     $('employer-link').hidden = !employerUrl; if (employerUrl) $('employer-link').href = employerUrl;
     const assessment = job.assessment || {}; const assessmentNode = $('drawer-assessment'); assessmentNode.replaceChildren();
     assessmentNode.append(element('p', 'assessment-text', assessment.geography || 'Verify the location and eligibility requirements.'));
-    assessmentNode.append(element('p', 'assessment-text', job.freshness?.day ? `Source publication: ${dateLabel(job.published_at)} IST ? ${job.freshness.state === 'fresh' ? 'within' : 'outside'} the last 72 hours.` : `Original publication date unverified.${job.alert_received_at ? ' Alert received ' + dateLabel(job.alert_received_at) + ' IST.' : ''}`));
+    assessmentNode.append(element('p', 'assessment-text', job.freshness?.day ? `Source publication: ${dateLabel(job.published_at)} IST ? ${job.freshness.state === 'fresh' ? 'within' : 'outside'} the last 24 hours.` : `Original publication date unverified.${job.alert_received_at ? ' Alert received ' + dateLabel(job.alert_received_at) + ' IST.' : ''}`));
     if (job.description_complete === false) assessmentNode.append(element('p', 'assessment-text', 'This is an email-alert excerpt. Read the full employer description to verify experience and posting date before preparing or applying.'));
     const sources = element('p', 'assessment-text', 'Sources: ');
     for (const source of job.source_links || [{source: job.source, url: job.url}]) { const url = safeUrl(source.url); if (!url) continue; const link = element('a', '', source.source); link.href = url; link.target = '_blank'; link.rel = 'noopener noreferrer'; sources.append(link, document.createTextNode(' ')); }
@@ -324,12 +329,15 @@
     assessmentNode.append(element('p', 'assessment-text', evidence ? `Experience evidence: ${evidence}` : 'No reliable numeric experience requirement was found. Read the job description.'));
     if (job.availability === 'not_in_latest_feed') assessmentNode.append(element('p', 'assessment-text', 'This opening is absent from the latest feed. Verify availability before applying.'));
     $('drawer-skills').replaceChildren(...(assessment.skills || []).map((skill) => element('span', 'skill-chip', skill)));
+    $('mark-submitted-button').hidden = isApplied(job);
+    assessmentNode.append(element('p', 'assessment-text', `${job.applicants?.label || 'Applicant count unavailable'}${job.applicants?.observed_at ? ' · reported ' + dateLabel(job.applicants.observed_at) : ''}. Missing counts never mean zero.`));
     const saved = review(job);
     $('review-status').value = jobStatus(job); $('review-notes').value = saved.notes || '';
     $('contact-name').value = saved.contact_name || ''; $('contact-url').value = saved.contact_url || '';
     $('confirmation-url').value = saved.confirmation_url || ''; $('confirm-applied').checked = false; updateAppliedConfirmation();
     $('drawer-description').textContent = job.description || 'No description was supplied. Open the employer page for full details.';
     const timestamps = [];
+    if (saved.submission_evidence?.kind === 'portal_confirmation_email') timestamps.push('Verified from ' + saved.submission_evidence.portal + ' confirmation email');
     if (saved.applied_at) timestamps.push(`Application recorded ${dateLabel(saved.applied_at)}`);
     if (saved.contacted_at) timestamps.push(`Contacted ${dateLabel(saved.contacted_at)}`);
     if (saved.followup_at && !saved.replied_at && jobStatus(job) === 'contacted') timestamps.push(`Follow-up due ${dateLabel(saved.followup_at)}`);
@@ -375,11 +383,24 @@
     if ((contactUrl && !safeUrl(contactUrl)) || (confirmationUrl && !safeUrl(confirmationUrl))) { toast('Use valid HTTPS contact and confirmation URLs.', true); return; }
     $('save-review-button').disabled = true;
     try {
-      await api('/api/jobs/review', { method: 'POST', body: { key: job.key, status, notes: $('review-notes').value, contact_name: $('contact-name').value, contact_url: contactUrl, confirmation_url: confirmationUrl, confirmed: status === 'applied' && $('confirm-applied').checked } });
+      const result = await api('/api/jobs/review', { method: 'POST', body: { key: job.key, status, notes: $('review-notes').value, contact_name: $('contact-name').value, contact_url: contactUrl, confirmation_url: confirmationUrl, confirmed: status === 'applied' && $('confirm-applied').checked } });
+      job.review = result.review; render();
       await loadWorkspace({ quiet: true }); toast(status === 'applied' ? 'Confirmed application recorded.' : 'Progress saved.');
       if (state.selectedKey) openJob(state.selectedKey);
     } catch (error) { toast(error.message, true); }
     finally { $('save-review-button').disabled = false; }
+  }
+
+  async function markSubmitted(job, button) {
+    button.disabled = true;
+    try {
+      const result = await api('/api/jobs/review', {method: 'POST', body: {key: job.key, status: 'applied', confirmed: true}});
+      job.review = result.review; render();
+      if (state.selectedKey === job.key) openJob(job.key);
+      toast('Submitted recorded. This job is removed from Pending.');
+      await loadWorkspace({quiet: true});
+    } catch (error) { toast(error.message, true); }
+    finally { if (button.isConnected) button.disabled = false; }
   }
 
   async function copyField(id) {
@@ -395,6 +416,8 @@
   document.querySelectorAll('[data-stat]').forEach((button) => button.addEventListener('click', () => { const status = button.dataset.stat; setView(status === 'all' ? 'opportunities' : 'applications', { reset: true }); setStatus(status === 'all' ? 'all' : status); }));
   $('other-status-filter').addEventListener('change', (event) => { if (event.target.value) setStatus(event.target.value); });
   $('search-input').addEventListener('input', (event) => { state.search = event.target.value.trim(); if (state.data) renderJobs(); });
+  $('applicants-filter').addEventListener('change', (event) => { state.applicants = event.target.value; if (state.data) renderJobs(); });
+  $('mark-submitted-button').addEventListener('click', () => { const job = selectedJob(); if (job) markSubmitted(job, $('mark-submitted-button')); });
   $('freshness-filter').addEventListener('change', (event) => { state.freshness = event.target.value; if (state.data) renderJobs(); });
   $('mode-filter').addEventListener('change', (event) => { state.mode = event.target.value; if (state.data) renderJobs(); });
   $('tier-filter').addEventListener('change', (event) => { state.tier = event.target.value; if (state.data) renderJobs(); });
